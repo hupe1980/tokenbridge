@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -121,7 +122,15 @@ func (s *KMS) GetJWKS(ctx context.Context) (*keyset.JWKS, error) {
 	case jwt.SigningMethodRS256, jwt.SigningMethodRS384, jwt.SigningMethodRS512,
 		jwt.SigningMethodPS256, jwt.SigningMethodPS384, jwt.SigningMethodPS512:
 		// Parse RSA public key
-		pubKey, err := jwt.ParseRSAPublicKeyFromPEM(getPubKeyOutput.PublicKey)
+		block := &pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: getPubKeyOutput.PublicKey,
+		}
+
+		// Encode the public key to PEM format
+		pemEncodedKey := pem.EncodeToMemory(block)
+
+		pubKey, err := jwt.ParseRSAPublicKeyFromPEM(pemEncodedKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse RSA public key: %w", err)
 		}

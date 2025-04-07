@@ -2,6 +2,8 @@ package signer
 
 import (
 	"context"
+	"encoding/pem"
+	"fmt"
 	"testing"
 	"time"
 
@@ -21,9 +23,8 @@ func (m *mockKMSClient) Sign(_ context.Context, _ *kms.SignInput, _ ...func(*kms
 }
 
 func (m *mockKMSClient) GetPublicKey(_ context.Context, _ *kms.GetPublicKeyInput, _ ...func(*kms.Options)) (*kms.GetPublicKeyOutput, error) {
-	// Mock public key output with a valid PEM-encoded RSA public key
-	return &kms.GetPublicKeyOutput{
-		PublicKey: []byte(`-----BEGIN PUBLIC KEY-----
+	// Mock public key in PEM format
+	pemPublicKey := []byte(`-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmyljH/ptppF0bKdlK6rk
 rxg1CDcUi8lSOkprHkLyjdWoRdB41si4FUhqfyJZpw46OXT+EdJkKwZt5DPWnDVP
 GAuwHmYt8RQP6cwLhbIqSkcx+xYA4l7q9lTpbljqKBz6iq7JtkcYyDVkirLJRWGm
@@ -31,7 +32,17 @@ CumprwuWjQ8nD72JyVHsMSE3JE4LyVRAF4sRIfJR9/KfEnuS8TXdbM+PYZBIuLu3
 wTJ+PXciAcYxES9y68HPR98hnsn/GWn3Pu3sVSKIGbGZR0ETRPC5o7T5aS2idbk2
 hDRvAPwLsyRI/Qp8p/6Oyn10i7y+yMJA6/nXJoXMRAGNy38MhkV/eUIvK2FCuh5D
 oQIDAQAB
------END PUBLIC KEY-----`),
+-----END PUBLIC KEY-----`)
+
+	// Decode the PEM public key to DER format
+	block, _ := pem.Decode(pemPublicKey)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block")
+	}
+
+	// Return the DER-encoded public key
+	return &kms.GetPublicKeyOutput{
+		PublicKey: block.Bytes, // DER-encoded public key
 	}, nil
 }
 
