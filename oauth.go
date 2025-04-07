@@ -104,7 +104,12 @@ func (as *AuthServer) CreateAccessToken(ctx context.Context, idToken *oidc.IDTok
 		}
 
 		// Add the custom claim to the token
-		token.Claims.(jwt.MapClaims)[key] = value
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			return "", fmt.Errorf("failed to assert token claims as jwt.MapClaims")
+		}
+
+		claims[key] = value
 	}
 
 	// Add the Key ID (kid) to the token header
