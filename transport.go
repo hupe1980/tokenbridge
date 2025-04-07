@@ -47,8 +47,11 @@ func (t *thumbprintValidatingTransport) RoundTrip(req *http.Request) (*http.Resp
 		// Handle the JWKS request and filter the keys based on thumbprints
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
+			resp.Body.Close()
 			return nil, fmt.Errorf("failed to read JWKS response body: %w", err)
 		}
+
+		resp.Body.Close()
 
 		// Parse the JWKS JSON
 		parsedJWKS, err := keyset.ParseJWKS(body)
