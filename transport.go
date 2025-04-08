@@ -4,6 +4,7 @@ import (
 	"crypto/sha1" // nolint:gosec // SHA-1 is required for certificate thumbprints
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -44,12 +45,29 @@ func (t *thumbprintValidatingTransport) RoundTrip(req *http.Request) (*http.Resp
 	// Handle specific paths: OpenID configuration and JWKS retrieval
 	switch {
 	case strings.HasSuffix(req.URL.Path, "/.well-known/openid-configuration"):
-		// Return the OIDC configuration response without modification
-		return resp, nil
+		// Parse the OIDC configuration response to extract the jwks_uri
+		defer resp.Body.Close()
 
-	case strings.HasSuffix(req.URL.Path, "/keys"):
+		var oidcConfig struct {
+			JWKSURI string `json:"jwks_uri"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&oidcConfig); err != nil {
+			return nil, fmt.Errorf("failed to parse OIDC configuration: %w", err)
+		}
+
+		// Validate the jwks_uri
+		if oidcConfig.JWKSURI == "" {
+			return nil, fmt.Errorf("jwks_uri is missing in the OIDC configuration")
+		}
+
 		// Fetch the JWKS certificate and calculate thumbprint
-		thumbprint, err := CalculateThumbprintFromJWKS(req.URL, func(o *CalculateThumbprintOptions) {
+		jwksURL, err := url.Parse(oidcConfig.JWKSURI)
+		if err != nil {
+			return nil, fmt.Errorf("invalid jwks_uri: %w", err)
+		}
+
+		thumbprint, err := CalculateThumbprintFromJWKS(jwksURL, func(o *CalculateThumbprintOptions) {
 			// Use the custom TLS configuration and dialer
 			o.TLSConfig = t.tlsConfig
 			o.Dialer = t.dialer
@@ -64,10 +82,9 @@ func (t *thumbprintValidatingTransport) RoundTrip(req *http.Request) (*http.Resp
 		}
 
 		return resp, nil
-
 	default:
 		// Handle unexpected paths
-		return nil, fmt.Errorf("unexpected path: %s", req.URL.Path)
+		return resp, nil
 	}
 }
 
