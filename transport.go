@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -46,13 +47,21 @@ func (t *thumbprintValidatingTransport) RoundTrip(req *http.Request) (*http.Resp
 	switch {
 	case strings.HasSuffix(req.URL.Path, "/.well-known/openid-configuration"):
 		// Parse the OIDC configuration response to extract the jwks_uri
-		defer resp.Body.Close()
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+
+		resp.Body.Close() // Close the original body
+
+		// Replace the response body with a new reader so it can be read again later
+		resp.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
 
 		var oidcConfig struct {
 			JWKSURI string `json:"jwks_uri"`
 		}
 
-		if err := json.NewDecoder(resp.Body).Decode(&oidcConfig); err != nil {
+		if err := json.Unmarshal(bodyBytes, &oidcConfig); err != nil {
 			return nil, fmt.Errorf("failed to parse OIDC configuration: %w", err)
 		}
 
