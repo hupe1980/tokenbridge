@@ -69,8 +69,13 @@ func (t *thumbprintValidatingTransport) RoundTrip(req *http.Request) (*http.Resp
 
 		thumbprint, err := CalculateThumbprintFromJWKS(jwksURL, func(o *CalculateThumbprintOptions) {
 			// Use the custom TLS configuration and dialer
-			o.TLSConfig = t.tlsConfig
-			o.Dialer = t.dialer
+			if t.tlsConfig != nil {
+				o.TLSConfig = t.tlsConfig
+			}
+
+			if t.dialer != nil {
+				o.Dialer = t.dialer
+			}
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to calculate thumbprint from JWKS: %w", err)
@@ -108,24 +113,8 @@ type CalculateThumbprintOptions struct {
 // CalculateThumbprintFromJWKS retrieves the certificate chain from the JWKS URI, extracts the last certificate,
 // and calculates its thumbprint (SHA-1).
 func CalculateThumbprintFromJWKS(jwksURI *url.URL, optFns ...func(o *CalculateThumbprintOptions)) (string, error) {
-	// Apply default options
-	opts := CalculateThumbprintOptions{
-		TLSConfig: &tls.Config{
-			MinVersion:         tls.VersionTLS12,
-			InsecureSkipVerify: false,
-		},
-		Dialer: &net.Dialer{
-			Timeout: 5 * time.Second,
-		},
-	}
-
-	// Apply custom options
-	for _, fn := range optFns {
-		fn(&opts)
-	}
-
 	// Step 1: Fetch the certificate from the JWKS URI
-	certs, err := fetchCertificateFromJWKS(jwksURI, opts)
+	certs, err := fetchCertificateFromJWKS(jwksURI, optFns...)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch certificate from JWKS URI: %v", err)
 	}
@@ -149,7 +138,23 @@ func CalculateThumbprintFromJWKS(jwksURI *url.URL, optFns ...func(o *CalculateTh
 
 // fetchCertificateFromJWKS establishes a TLS connection to the server and retrieves the certificate chain.
 // It returns the certificates (including any intermediate certificates) from the server's TLS handshake.
-func fetchCertificateFromJWKS(jwksURI *url.URL, opts CalculateThumbprintOptions) ([]*x509.Certificate, error) {
+func fetchCertificateFromJWKS(jwksURI *url.URL, optFns ...func(o *CalculateThumbprintOptions)) ([]*x509.Certificate, error) {
+	// Apply default options
+	opts := CalculateThumbprintOptions{
+		TLSConfig: &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: false,
+		},
+		Dialer: &net.Dialer{
+			Timeout: 5 * time.Second,
+		},
+	}
+
+	// Apply custom options
+	for _, fn := range optFns {
+		fn(&opts)
+	}
+
 	// Create a custom dialer with the provided config
 	conn, err := tls.DialWithDialer(opts.Dialer, "tcp", fmt.Sprintf("%s:443", jwksURI.Hostname()), opts.TLSConfig)
 	if err != nil {
