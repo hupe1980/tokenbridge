@@ -17,9 +17,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var (
-	// nolint gosec no real key
-	privateRSAKeyString = `-----BEGIN PRIVATE KEY-----
+// nolint gosec no real key
+var privateRSAKeyString = `-----BEGIN PRIVATE KEY-----
 MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDNASlRgl1vfXRg
 iphK5rC5IwH10YktWBX+d1DAGXbAC1OwFn0OKjHxpR/uQwcKDr19+z/xJuLm3hJ0
 Vc7p9Cj+9nOz8yfTWq3+NyDfrudbkPfjR1Yz/T0PSTPS53EWslVioi5Vx+s2QS3Q
@@ -47,18 +46,13 @@ bQZuGVClsbeJkrcTtIMgCT+0KhBGYyCjvEahky0WcKlTCcLX1OMSknIA7YMCbWQ3
 qDg/Thja4xMsBA957dbfdQSH5KzOwoLO+fSGjDuQN+7Xvr+NqFsWDwId1cLai694
 5DAzavPOnl9Okefi6P9Ntg==
 -----END PRIVATE KEY-----`
-	expectedRSAThumbprint = "Dy6gufsOYqCgKLis6fedxHJkduSOBcV4x9zzOehUgh0"
-)
 
-var (
-	// nolint gosec no real key
-	privateECKeyString = `-----BEGIN EC PRIVATE KEY-----
+// nolint gosec no real key
+var privateECKeyString = `-----BEGIN EC PRIVATE KEY-----
 MHcCAQEEIP1/XfntwTG5/keyqKEP9xxVzitaRyjRpCoLmT/4xbN1oAoGCCqGSM49
 AwEHoUQDQgAEPGHIk8Tk0KqxTNgfu5BRgy8rtDSvaBggbmj8Ps0wv7Kzn78VyRHL
 tLCe5GXCI/EdZeZRw5Kv8VFMxBocMXq8AA==
 -----END EC PRIVATE KEY-----`
-	expectedECThumbprint = "ZSpLYiTtTyrcblwZyeZ9U3OvMK2Zo6TAO0827e1cI_E"
-)
 
 func loadRSAPrivateKey() (*rsa.PrivateKey, error) {
 	return jwt.ParseRSAPrivateKeyFromPEM([]byte(privateRSAKeyString))
@@ -184,7 +178,7 @@ func (f *fakeRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 
 func TestIDTokenVerification(t *testing.T) {
 	t.Run("RSA Key Verification", func(t *testing.T) {
-		t.Run("Valid RSA Key with Correct Thumbprint", func(t *testing.T) {
+		t.Run("Valid RSA Key", func(t *testing.T) {
 			privateKey, err := loadRSAPrivateKey()
 			if err != nil {
 				t.Fatalf("Failed to load RSA private key: %v", err)
@@ -204,7 +198,6 @@ func TestIDTokenVerification(t *testing.T) {
 
 			provider, err := NewOIDCVerifier(ctx, providerURL, []string{"my-local-app"}, func(o *OIDCVerifierOptions) {
 				o.Transport = &fakeRoundTripper{}
-				o.Thumbprints = []string{expectedRSAThumbprint}
 			})
 			if err != nil {
 				t.Fatalf("Failed to create OIDC provider: %v", err)
@@ -214,41 +207,10 @@ func TestIDTokenVerification(t *testing.T) {
 				t.Fatalf("Failed to verify RSA ID token: %v", err)
 			}
 		})
-
-		t.Run("Valid RSA Key with Incorrect Thumbprint", func(t *testing.T) {
-			privateKey, err := loadRSAPrivateKey()
-			if err != nil {
-				t.Fatalf("Failed to load RSA private key: %v", err)
-			}
-
-			token, err := createIDToken(privateKey)
-			if err != nil {
-				t.Fatalf("Failed to create RSA ID token: %v", err)
-			}
-
-			providerURL, err := url.Parse("http://fake-oidc.local")
-			if err != nil {
-				t.Fatalf("Failed to parse provider URL: %v", err)
-			}
-
-			ctx := context.Background()
-
-			provider, err := NewOIDCVerifier(ctx, providerURL, []string{"my-local-app"}, func(o *OIDCVerifierOptions) {
-				o.Transport = &fakeRoundTripper{}
-				o.Thumbprints = []string{"invalid-thumbprint"}
-			})
-			if err != nil {
-				t.Fatalf("Failed to create OIDC provider: %v", err)
-			}
-
-			if _, err := provider.Verify(ctx, token); err == nil {
-				t.Fatalf("Expected error for invalid RSA thumbprint, but got none")
-			}
-		})
 	})
 
 	t.Run("EC Key Verification", func(t *testing.T) {
-		t.Run("Valid EC Key with Correct Thumbprint", func(t *testing.T) {
+		t.Run("Valid EC Key", func(t *testing.T) {
 			privateKey, err := loadECPrivateKey()
 			if err != nil {
 				t.Fatalf("Failed to load EC private key: %v", err)
@@ -269,7 +231,6 @@ func TestIDTokenVerification(t *testing.T) {
 			provider, err := NewOIDCVerifier(ctx, providerURL, []string{"my-local-app"}, func(o *OIDCVerifierOptions) {
 				o.Transport = &fakeRoundTripper{}
 				o.SupportedSigningAlgs = []string{"ES256"}
-				o.Thumbprints = []string{expectedECThumbprint}
 			})
 			if err != nil {
 				t.Fatalf("Failed to create OIDC provider: %v", err)
@@ -277,38 +238,6 @@ func TestIDTokenVerification(t *testing.T) {
 
 			if _, err := provider.Verify(ctx, token); err != nil {
 				t.Fatalf("Failed to verify EC ID token: %v", err)
-			}
-		})
-
-		t.Run("Valid EC Key with Incorrect Thumbprint", func(t *testing.T) {
-			privateKey, err := loadECPrivateKey()
-			if err != nil {
-				t.Fatalf("Failed to load EC private key: %v", err)
-			}
-
-			token, err := createECIDToken(privateKey)
-			if err != nil {
-				t.Fatalf("Failed to create EC ID token: %v", err)
-			}
-
-			providerURL, err := url.Parse("http://fake-oidc.local")
-			if err != nil {
-				t.Fatalf("Failed to parse provider URL: %v", err)
-			}
-
-			ctx := context.Background()
-
-			provider, err := NewOIDCVerifier(ctx, providerURL, []string{"my-local-app"}, func(o *OIDCVerifierOptions) {
-				o.Transport = &fakeRoundTripper{}
-				o.SupportedSigningAlgs = []string{"ES256"}
-				o.Thumbprints = []string{"invalid-thumbprint"}
-			})
-			if err != nil {
-				t.Fatalf("Failed to create OIDC provider: %v", err)
-			}
-
-			if _, err := provider.Verify(ctx, token); err == nil {
-				t.Fatalf("Expected error for invalid EC thumbprint, but got none")
 			}
 		})
 	})

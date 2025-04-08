@@ -1,35 +1,39 @@
 package tokenbridge
 
 import (
-	"bytes"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rsa"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
+	"crypto/sha1" // nolint:gosec // SHA-1 is required for certificate thumbprints
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
-	"io"
-	"math/big"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
-
-	"github.com/hupe1980/tokenbridge/keyset"
+	"time"
 )
 
-// thumbprintValidatingTransport is a custom HTTP transport that validates JWKs by checking the
-// thumbprints of the public keys. It intercepts HTTP requests and responses, particularly for
-// JWKS and OIDC configuration endpoints.
+// thumbprintValidatingTransport is a custom HTTP transport that intercepts requests and responses
+// to validate the thumbprints of the certificates in JWKS (JSON Web Key Set) responses. This transport
+// ensures that only trusted certificate chains, based on their thumbprints, are used. If the thumbprint
+// of a certificate does not match one of the valid thumbprints, the response is rejected.
 type thumbprintValidatingTransport struct {
-	// transport is the underlying HTTP RoundTripper that handles the actual HTTP requests.
+	// transport is the underlying HTTP RoundTripper that performs the actual HTTP requests.
 	transport http.RoundTripper
 
-	// thumbprints is a list of valid thumbprints used to filter the JWKs in the JWKS response.
+	// thumbprints is a slice of valid thumbprints that will be compared against the thumbprints
+	// of certificates in the JWKS response. If the thumbprint of a certificate in the chain does not match
+	// one of the valid thumbprints, the response is rejected.
 	thumbprints []string
+
+	// tlsConfig is a customizable TLS configuration used when establishing the TLS connection.
+	tlsConfig *tls.Config
+
+	// dialer is a custom network dialer that will be used to establish the network connection.
+	dialer *net.Dialer
 }
 
-// RoundTrip executes the HTTP request and processes the response. It filters the JWKS response by
-// validating the thumbprints of the public keys in the JWKS.
+// RoundTrip executes the HTTP request and processes the response. It validates the thumbprints
+// of the public keys in the JWKS response.
 func (t *thumbprintValidatingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Perform the HTTP request
 	resp, err := t.transport.RoundTrip(req)
@@ -44,104 +48,20 @@ func (t *thumbprintValidatingTransport) RoundTrip(req *http.Request) (*http.Resp
 		return resp, nil
 
 	case strings.HasSuffix(req.URL.Path, "/keys"):
-		// Handle the JWKS request and filter the keys based on thumbprints
-		body, err := io.ReadAll(resp.Body)
+		// Fetch the JWKS certificate and calculate thumbprint
+		thumbprint, err := CalculateThumbprintFromJWKS(req.URL, func(o *CalculateThumbprintOptions) {
+			// Use the custom TLS configuration and dialer
+			o.TLSConfig = t.tlsConfig
+			o.Dialer = t.dialer
+		})
 		if err != nil {
-			resp.Body.Close()
-			return nil, fmt.Errorf("failed to read JWKS response body: %w", err)
+			return nil, fmt.Errorf("failed to calculate thumbprint from JWKS: %w", err)
 		}
 
-		resp.Body.Close()
-
-		// Parse the JWKS JSON
-		parsedJWKS, err := keyset.ParseJWKS(body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse JWKS: %w", err)
+		// Check if the thumbprint is valid
+		if !t.isThumbprintValid(thumbprint) {
+			return nil, fmt.Errorf("thumbprint %s is not valid", thumbprint)
 		}
-
-		// Filter the keys by thumbprint validity
-		filteredKeys := []keyset.JWK{}
-
-		for _, key := range parsedJWKS.Keys {
-			var thumbprint string
-
-			// Calculate the thumbprint based on the key type (RSA or EC)
-			switch key.Kty {
-			case "RSA":
-				// Handle RSA keys by calculating thumbprint from modulus and exponent
-				nBytes, err := base64.RawURLEncoding.DecodeString(key.N)
-				if err != nil {
-					return nil, fmt.Errorf("failed to decode modulus: %w", err)
-				}
-
-				eBytes, err := base64.RawURLEncoding.DecodeString(key.E)
-				if err != nil {
-					return nil, fmt.Errorf("failed to decode exponent: %w", err)
-				}
-
-				publicKey := &rsa.PublicKey{
-					N: new(big.Int).SetBytes(nBytes),
-					E: int(new(big.Int).SetBytes(eBytes).Int64()),
-				}
-
-				// Calculate the thumbprint for the RSA public key
-				thumbprint, err = calculateThumbprint(publicKey)
-				if err != nil {
-					return nil, fmt.Errorf("failed to calculate thumbprint: %w", err)
-				}
-
-			case "EC":
-				// Handle EC keys by calculating thumbprint from x and y coordinates
-				xBytes, err := base64.RawURLEncoding.DecodeString(key.X)
-				if err != nil {
-					return nil, fmt.Errorf("failed to decode x-coordinate: %w", err)
-				}
-
-				yBytes, err := base64.RawURLEncoding.DecodeString(key.Y)
-				if err != nil {
-					return nil, fmt.Errorf("failed to decode y-coordinate: %w", err)
-				}
-
-				publicKey := &ecdsa.PublicKey{
-					Curve: getEllipticCurve(key.Crv),
-					X:     new(big.Int).SetBytes(xBytes),
-					Y:     new(big.Int).SetBytes(yBytes),
-				}
-
-				// Calculate the thumbprint for the EC public key
-				thumbprint, err = calculateThumbprint(publicKey)
-				if err != nil {
-					return nil, fmt.Errorf("failed to calculate thumbprint: %w", err)
-				}
-
-			default:
-				return nil, fmt.Errorf("unsupported key type: %s", key.Kty)
-			}
-
-			// Filter the key if its thumbprint matches one of the valid thumbprints
-			if t.isThumbprintValid(thumbprint) {
-				filteredKeys = append(filteredKeys, key)
-			}
-		}
-
-		// Raise an error if no keys match the expected thumbprints
-		if len(filteredKeys) == 0 {
-			return nil, fmt.Errorf("no keys in JWKS match the expected thumbprints")
-		}
-
-		// Replace the JWKS response with the filtered keys
-		filteredJWKS := keyset.JWKS{Keys: filteredKeys}
-
-		// Encode the filtered JWKS back to JSON
-		filteredJWKSBytes, err := json.Marshal(filteredJWKS)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode filtered JWKS: %w", err)
-		}
-
-		// Replace the response body with the filtered JWKS
-		resp.Body = io.NopCloser(bytes.NewReader(filteredJWKSBytes))
-		resp.ContentLength = int64(len(filteredJWKSBytes))
-		resp.Header.Set("Content-Type", "application/json")
 
 		return resp, nil
 
@@ -162,55 +82,84 @@ func (t *thumbprintValidatingTransport) isThumbprintValid(thumbprint string) boo
 	return false
 }
 
-// calculateThumbprint calculates the thumbprint for a given public key (either RSA or EC).
-// The thumbprint is calculated as the SHA-256 hash of the serialized key object (JWK),
-// base64 URL-encoded.
-func calculateThumbprint(publicKey any) (string, error) {
-	var jwk map[string]string
-
-	// Create the JWK (JSON Web Key) representation based on the public key type
-	switch key := publicKey.(type) {
-	case *rsa.PublicKey:
-		// Create a JWK for RSA with "n" (modulus) and "e" (exponent)
-		jwk = map[string]string{
-			"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
-			"e": "AQAB", // Default exponent for RSA keys
-		}
-
-	case *ecdsa.PublicKey:
-		// Create a JWK for EC with "x" (x-coordinate) and "y" (y-coordinate)
-		jwk = map[string]string{
-			"x": base64.RawURLEncoding.EncodeToString(key.X.Bytes()),
-			"y": base64.RawURLEncoding.EncodeToString(key.Y.Bytes()),
-		}
-
-	default:
-		return "", fmt.Errorf("unsupported key type: %T", publicKey)
-	}
-
-	// Serialize the JWK to JSON
-	jwkBytes, err := json.Marshal(jwk)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal JWK: %w", err)
-	}
-
-	// Calculate the SHA-256 hash of the JWK
-	hash := sha256.Sum256(jwkBytes)
-
-	// Return the base64 URL-encoded hash as the thumbprint
-	return base64.RawURLEncoding.EncodeToString(hash[:]), nil
+// CalculateThumbprintOptions holds configuration for CalculateThumbprintFromJWKS
+type CalculateThumbprintOptions struct {
+	TLSConfig *tls.Config
+	Dialer    *net.Dialer
 }
 
-// getEllipticCurve maps the curve name to the corresponding elliptic curve.
-func getEllipticCurve(crv string) elliptic.Curve {
-	switch crv {
-	case "P-256":
-		return elliptic.P256()
-	case "P-384":
-		return elliptic.P384()
-	case "P-521":
-		return elliptic.P521()
-	default:
-		return nil
+// CalculateThumbprintFromJWKS retrieves the certificate chain from the JWKS URI, extracts the last certificate,
+// and calculates its thumbprint (SHA-1).
+func CalculateThumbprintFromJWKS(jwksURI *url.URL, optFns ...func(o *CalculateThumbprintOptions)) (string, error) {
+	// Apply default options
+	opts := CalculateThumbprintOptions{
+		TLSConfig: &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: false,
+		},
+		Dialer: &net.Dialer{
+			Timeout: 5 * time.Second,
+		},
 	}
+
+	// Apply custom options
+	for _, fn := range optFns {
+		fn(&opts)
+	}
+
+	// Step 1: Fetch the certificate from the JWKS URI
+	certs, err := fetchCertificateFromJWKS(jwksURI, opts)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch certificate from JWKS URI: %v", err)
+	}
+
+	// Step 2: Ensure the certificate chain is not empty
+	if len(certs) == 0 {
+		return "", fmt.Errorf("certificate chain is empty")
+	}
+
+	// Retrieve the last certificate in the chain (usually the top intermediate CA certificate)
+	lastCert := certs[len(certs)-1]
+
+	// Step 3: Calculate the thumbprint (SHA-1 fingerprint) of the last certificate in the chain
+	thumbprint, err := calculateThumbprint(lastCert)
+	if err != nil {
+		return "", fmt.Errorf("failed to calculate thumbprint: %v", err)
+	}
+
+	return thumbprint, nil
+}
+
+// fetchCertificateFromJWKS establishes a TLS connection to the server and retrieves the certificate chain.
+// It returns the certificates (including any intermediate certificates) from the server's TLS handshake.
+func fetchCertificateFromJWKS(jwksURI *url.URL, opts CalculateThumbprintOptions) ([]*x509.Certificate, error) {
+	// Create a custom dialer with the provided config
+	conn, err := tls.DialWithDialer(opts.Dialer, "tcp", fmt.Sprintf("%s:443", jwksURI.Hostname()), opts.TLSConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to establish TLS connection: %v", err)
+	}
+	defer conn.Close()
+
+	// Retrieve the certificate chain from the connection state
+	certs := conn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("no certificates found in the chain")
+	}
+
+	return certs, nil
+}
+
+// calculateThumbprint calculates the SHA-1 thumbprint of the certificate (used to verify its authenticity).
+func calculateThumbprint(cert *x509.Certificate) (string, error) {
+	// Calculate the thumbprint using SHA-1 (this is required for certificate thumbprints)
+	thumbprint := sha1.New() // nolint:gosec // SHA-1 is required for certificate thumbprints
+	if _, err := thumbprint.Write(cert.Raw); err != nil {
+		return "", fmt.Errorf("failed to write certificate raw data to SHA-1 hash: %v", err)
+	}
+
+	// Get the SHA-1 hash and convert it to a string without colon separators
+	thumbprintBytes := thumbprint.Sum(nil)
+	thumbprintStr := fmt.Sprintf("%X", thumbprintBytes)
+
+	return thumbprintStr, nil
 }
