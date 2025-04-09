@@ -25,6 +25,21 @@ type AuthServerOptions struct {
 	OnTokenCreate func(ctx context.Context, idToken *oidc.IDToken) (jwt.MapClaims, error)
 }
 
+// DefaultOnTokenCreate is the default implementation of the OnTokenCreate callback.
+// It generates a set of default claims based on the provided ID token.
+// This function can be overridden by the user to customize the claims as needed.
+// The default implementation includes the issuer, subject, and audience claims.
+// It returns a map of claims that will be included in the generated access token.
+// The "sub" claim is set to the subject of the ID token, and the "iss" claim is set to the issuer of the ID token.
+// The "aud" claim is set to the audience of the ID token.
+func DefaultOnTokenCreate(_ context.Context, idToken *oidc.IDToken) (jwt.MapClaims, error) {
+	return jwt.MapClaims{
+		"iss": idToken.Issuer,
+		"sub": idToken.Subject,
+		"aud": idToken.Audience,
+	}, nil
+}
+
 // AuthServer is responsible for creating and signing access tokens for authenticated users.
 // It uses an underlying signer and the configuration provided in AuthServerOptions.
 type AuthServer struct {
@@ -45,14 +60,7 @@ func NewAuthServer(iss string, signer Signer, optFns ...func(o *AuthServerOption
 	opts := AuthServerOptions{
 		MandatoryClaims: []string{"sub", "iss", "aud", "exp", "iat"},
 		TokenExpiration: time.Hour, // Default token expiration is one hour.
-		OnTokenCreate: func(_ context.Context, idToken *oidc.IDToken) (jwt.MapClaims, error) {
-			// Default implementation returns the claims from the ID token.
-			return jwt.MapClaims{
-				"iss": idToken.Issuer,
-				"sub": idToken.Subject,
-				"aud": idToken.Audience,
-			}, nil
-		},
+		OnTokenCreate:   DefaultOnTokenCreate,
 	}
 
 	// Apply any custom options provided through optFns

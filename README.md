@@ -61,6 +61,13 @@ Here's how TokenBridge works in a typical token exchange flow:
 - Issues standards-compliant ID tokens.
 - Works with any OIDC-compatible identity provider (e.g., Auth0, Google, Okta).
 
+## 🚀 Related Projects
+
+Looking to integrate or extend TokenBridge? Check out these related projects:
+
+- [**TokenBridge GitHub Action**](https://github.com/hupe1980/tokenbridge-action): Automate your workflows with TokenBridge using GitHub Actions.
+- [**TokenBridge Backend Example**](https://github.com/hupe1980/tokenbridge-backend-example): A practical example of how to create a TokenBridge backend application.
+
 ## 🤝 Contributing
 
 We welcome contributions! Feel free to open issues, share feedback, or submit pull requests to improve TokenBridge.
