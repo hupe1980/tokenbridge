@@ -37,6 +37,12 @@ type OIDCVerifierOptions struct {
 	// Now is a function that returns the current time, which can be used for expiry and validity checks.
 	// If not provided, the default time function (time.Now) is used.
 	Now func() time.Time
+
+	// CalculateThumbprintOptions is an optional configuration for calculating the thumbprint.
+	// It allows customization of the TLS configuration and dialer used to establish the connection.
+	// This is useful for scenarios where you need to specify custom TLS settings or a custom dialer.
+	// If nil, default settings will be used.
+	CalculateThumbprintOptions *CalculateThumbprintOptions
 }
 
 // OIDCVerifier is responsible for verifying OpenID Connect ID tokens.
@@ -102,8 +108,9 @@ func NewOIDCVerifier(ctx context.Context, issuerURL *url.URL, clientIDs []string
 	transport := opts.Transport
 	if len(opts.Thumbprints) > 0 {
 		transport = &thumbprintValidatingTransport{
-			transport:   opts.Transport,
-			thumbprints: opts.Thumbprints,
+			transport:                  opts.Transport,
+			thumbprints:                opts.Thumbprints,
+			calculateThumbprintOptions: opts.CalculateThumbprintOptions,
 		}
 	}
 

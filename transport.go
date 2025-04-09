@@ -27,11 +27,11 @@ type thumbprintValidatingTransport struct {
 	// one of the valid thumbprints, the response is rejected.
 	thumbprints []string
 
-	// tlsConfig is a customizable TLS configuration used when establishing the TLS connection.
-	tlsConfig *tls.Config
-
-	// dialer is a custom network dialer that will be used to establish the network connection.
-	dialer *net.Dialer
+	// calculateThumbprintOptions is an optional configuration for calculating the thumbprint.
+	// It allows customization of the TLS configuration and dialer used to establish the connection.
+	// This is useful for scenarios where you need to specify custom TLS settings or a custom dialer.
+	// If nil, default settings will be used.
+	calculateThumbprintOptions *CalculateThumbprintOptions
 }
 
 // RoundTrip executes the HTTP request and processes the response. It validates the certificate
@@ -80,12 +80,14 @@ func (t *thumbprintValidatingTransport) RoundTrip(req *http.Request) (*http.Resp
 		}
 
 		thumbprint, err := CalculateThumbprintFromJWKS(jwksURL, func(o *CalculateThumbprintOptions) {
-			if t.tlsConfig != nil {
-				o.TLSConfig = t.tlsConfig
-			}
+			if t.calculateThumbprintOptions != nil {
+				if t.calculateThumbprintOptions.TLSConfig != nil {
+					o.TLSConfig = t.calculateThumbprintOptions.TLSConfig
+				}
 
-			if t.dialer != nil {
-				o.Dialer = t.dialer
+				if t.calculateThumbprintOptions.Dialer != nil {
+					o.Dialer = t.calculateThumbprintOptions.Dialer
+				}
 			}
 		})
 		if err != nil {
@@ -117,8 +119,11 @@ func (t *thumbprintValidatingTransport) isThumbprintValid(thumbprint string) boo
 
 // CalculateThumbprintOptions holds configuration for CalculateThumbprintFromJWKS
 type CalculateThumbprintOptions struct {
+	// TLSConfig is a customizable TLS configuration used when establishing the TLS connection.
 	TLSConfig *tls.Config
-	Dialer    *net.Dialer
+
+	// Dialer is a custom network dialer that will be used to establish the network connection.
+	Dialer *net.Dialer
 }
 
 // CalculateThumbprintFromJWKS retrieves the certificate chain from the JWKS URI, extracts the last certificate,

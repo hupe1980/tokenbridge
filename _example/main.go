@@ -48,8 +48,7 @@ func main() {
 
 		// Parse the JSON payload
 		var payload struct {
-			IDToken      string         `json:"id_token"`
-			CustomClaims map[string]any `json:"custom_claims"`
+			IDToken string `json:"id_token"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -64,7 +63,7 @@ func main() {
 		}
 
 		// Exchange the token
-		accessToken, err := tokenBridge.ExchangeToken(r.Context(), payload.IDToken, payload.CustomClaims)
+		accessToken, err := tokenBridge.ExchangeToken(r.Context(), payload.IDToken)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to exchange token: %v", err), http.StatusInternalServerError)
 			return
