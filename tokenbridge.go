@@ -31,26 +31,24 @@ func New(oidcVerifier *OIDCVerifier, authServer *AuthServer) *TokenBridge {
 }
 
 // ExchangeToken exchanges a raw ID token for an access token. It first verifies the ID token using
-// the OIDCVerifier, and then creates an access token using the AuthServer. Optionally, custom claims
-// can be included in the access token.
+// the OIDCVerifier, and then creates an access token using the AuthServer.
 //
 // Parameters:
 // - ctx: The context for managing the request lifecycle.
 // - rawIDToken: The raw ID token to be verified and exchanged.
-// - customClaims: A map of custom claims to include in the created access token.
 //
 // Returns:
 // - The created access token string.
 // - An error if there was an issue during the token exchange process.
-func (tb *TokenBridge) ExchangeToken(ctx context.Context, rawIDToken string, customClaims map[string]any) (string, error) {
+func (tb *TokenBridge) ExchangeToken(ctx context.Context, rawIDToken string) (string, error) {
 	// Verify the ID token using the OIDC verifier.
 	idToken, err := tb.oidcVerifier.Verify(ctx, rawIDToken)
 	if err != nil {
 		return "", fmt.Errorf("failed to verify ID token: %w", err)
 	}
 
-	// Create an access token using the authenticated ID token and optional custom claims.
-	accessToken, err := tb.authServer.CreateAccessToken(ctx, idToken, customClaims)
+	// Create an access token using the authenticated ID token.
+	accessToken, err := tb.authServer.CreateAccessToken(ctx, idToken)
 	if err != nil {
 		return "", fmt.Errorf("failed to create access token: %w", err)
 	}

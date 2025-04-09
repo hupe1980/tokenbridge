@@ -34,8 +34,11 @@ type thumbprintValidatingTransport struct {
 	dialer *net.Dialer
 }
 
-// RoundTrip executes the HTTP request and processes the response. It validates the thumbprints
-// of the public keys in the JWKS response.
+// RoundTrip executes the HTTP request and processes the response. It validates the certificate
+// of the JWKS URI (JSON Web Key Set) by calculating its thumbprint and comparing it against
+// a list of trusted thumbprints. If the thumbprint does not match any of the valid thumbprints,
+// the response is rejected. This ensures that only trusted certificate chains are used for
+// OpenID Connect (OIDC) and JWKS retrieval.
 func (t *thumbprintValidatingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Perform the HTTP request
 	resp, err := t.transport.RoundTrip(req)
@@ -77,7 +80,6 @@ func (t *thumbprintValidatingTransport) RoundTrip(req *http.Request) (*http.Resp
 		}
 
 		thumbprint, err := CalculateThumbprintFromJWKS(jwksURL, func(o *CalculateThumbprintOptions) {
-			// Use the custom TLS configuration and dialer
 			if t.tlsConfig != nil {
 				o.TLSConfig = t.tlsConfig
 			}
@@ -97,7 +99,7 @@ func (t *thumbprintValidatingTransport) RoundTrip(req *http.Request) (*http.Resp
 
 		return resp, nil
 	default:
-		// Handle unexpected paths
+		// Handle other requests (e.g., JWKS retrieval)
 		return resp, nil
 	}
 }

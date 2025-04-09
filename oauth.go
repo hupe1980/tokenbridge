@@ -3,8 +3,6 @@ package tokenbridge
 import (
 	"context"
 	"fmt"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -15,17 +13,16 @@ import (
 // AuthServerOptions defines the configuration options for the AuthServer.
 // These options control the behavior of the authentication server, such as token expiration and subject overwriting.
 type AuthServerOptions struct {
-	// SubjectOverwrite allows you to specify a custom subject for the access token.
-	// If not set, the subject from the ID token will be used.
-	SubjectOverwrite string
-
-	// AudienceOverwrite allows you to specify a custom audience for the access token.
-	// If not set, the audience from the ID token will be used.
-	AudienceOverwrite []string
+	// MandatoryClaims are the claims that must be present in the access token.
+	MandatoryClaims []string
 
 	// TokenExpiration defines the duration for which the access token will be valid.
 	// The default is set to one hour.
 	TokenExpiration time.Duration
+
+	// OnTokenCreate is a callback function that allows customization of claims during token creation.
+	// If not set, a default implementation will be used.
+	OnTokenCreate func(ctx context.Context, idToken *oidc.IDToken) (jwt.MapClaims, error)
 }
 
 // AuthServer is responsible for creating and signing access tokens for authenticated users.
@@ -46,7 +43,16 @@ type AuthServer struct {
 //   - A new AuthServer instance configured with the provided options.
 func NewAuthServer(iss string, signer Signer, optFns ...func(o *AuthServerOptions)) *AuthServer {
 	opts := AuthServerOptions{
+		MandatoryClaims: []string{"sub", "iss", "aud", "exp", "iat"},
 		TokenExpiration: time.Hour, // Default token expiration is one hour.
+		OnTokenCreate: func(_ context.Context, idToken *oidc.IDToken) (jwt.MapClaims, error) {
+			// Default implementation returns the claims from the ID token.
+			return jwt.MapClaims{
+				"iss": idToken.Issuer,
+				"sub": idToken.Subject,
+				"aud": idToken.Audience,
+			}, nil
+		},
 	}
 
 	// Apply any custom options provided through optFns
@@ -55,6 +61,18 @@ func NewAuthServer(iss string, signer Signer, optFns ...func(o *AuthServerOption
 	}
 
 	return &AuthServer{iss: iss, signer: signer, opts: opts}
+}
+
+// checkMandatoryClaims ensures that all mandatory claims are present in the provided claims map.
+// If any mandatory claim is missing, it returns an error.
+func checkMandatoryClaims(claims jwt.MapClaims, mandatoryClaims []string) error {
+	for _, claim := range mandatoryClaims {
+		if _, exists := claims[claim]; !exists {
+			return fmt.Errorf("missing mandatory claim '%s'", claim)
+		}
+	}
+
+	return nil
 }
 
 // CreateAccessToken generates an access token based on the provided OIDC ID token and custom claims.
@@ -67,50 +85,29 @@ func NewAuthServer(iss string, signer Signer, optFns ...func(o *AuthServerOption
 // Returns:
 //   - The signed JWT access token as a string if successful.
 //   - An error if there is a problem generating or signing the token.
-func (as *AuthServer) CreateAccessToken(ctx context.Context, idToken *oidc.IDToken, customClaims map[string]any) (string, error) {
-	// Set the subject of the access token. If SubjectOverwrite is set, use it instead of the ID token's subject.
-	sub := idToken.Subject
-	if as.opts.SubjectOverwrite != "" {
-		sub = as.opts.SubjectOverwrite
+func (as *AuthServer) CreateAccessToken(ctx context.Context, idToken *oidc.IDToken) (string, error) {
+	claims, err := as.opts.OnTokenCreate(ctx, idToken)
+	if err != nil {
+		return "", fmt.Errorf("failed to create token claims: %w", err)
 	}
 
-	aud := idToken.Audience
-	if len(as.opts.AudienceOverwrite) > 0 {
-		aud = as.opts.AudienceOverwrite
+	// Ensure the "exp" claim is set to the token expiration time
+	if _, exists := claims["exp"]; !exists {
+		claims["exp"] = time.Now().Add(as.opts.TokenExpiration).Unix()
+	}
+
+	// Ensure the "iat" claim is set to the current time
+	if _, exists := claims["iat"]; !exists {
+		claims["iat"] = time.Now().Unix()
+	}
+
+	// Check for mandatory claims
+	if err := checkMandatoryClaims(claims, as.opts.MandatoryClaims); err != nil {
+		return "", err
 	}
 
 	// Create a new JWT token with the required claims
-	token := jwt.NewWithClaims(as.signer.SigningMethod(), jwt.MapClaims{
-		"iss":                     as.iss,
-		"sub":                     sub,
-		"aud":                     aud,
-		"exp":                     time.Now().Add(as.opts.TokenExpiration).Unix(),
-		"tokenbridge:idtoken_iss": idToken.Issuer,
-		"tokenbridge:idtoken_aud": idToken.Audience,
-		"tokenbridge:idtoken_sub": idToken.Subject,
-		"tokenbridge:idtoken_exp": idToken.Expiry.Unix(),
-		"tokenbridge:idtoken_iat": idToken.IssuedAt.Unix(),
-	})
-
-	// Add any custom claims to the token, ensuring reserved claims are not overwritten
-	for key, value := range customClaims {
-		// Reserved claims cannot be overwritten
-		if slices.Contains([]string{"iss", "sub", "exp"}, key) {
-			return "", fmt.Errorf("cannot overwrite reserved claim %s", key)
-		}
-
-		if strings.HasPrefix(key, "tokenbridge:") {
-			return "", fmt.Errorf("cannot overwrite reserved claim %s", key)
-		}
-
-		// Add the custom claim to the token
-		claims, ok := token.Claims.(jwt.MapClaims)
-		if !ok {
-			return "", fmt.Errorf("failed to assert token claims as jwt.MapClaims")
-		}
-
-		claims[key] = value
-	}
+	token := jwt.NewWithClaims(as.signer.SigningMethod(), claims)
 
 	// Add the Key ID (kid) to the token header
 	token.Header["kid"] = as.signer.KeyID()
