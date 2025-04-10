@@ -3,6 +3,7 @@ package tokenbridge
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -108,12 +109,16 @@ func (ti *TokenIssuerWithJWKS) IssueAccessToken(ctx context.Context, idToken *oi
 
 	// Ensure the "exp" claim is set to the token expiration time
 	if _, exists := claims["exp"]; !exists {
-		claims["exp"] = time.Now().Add(ti.opts.TokenExpiration).Unix()
+		if slices.Contains(ti.opts.MandatoryClaims, "exp") {
+			claims["exp"] = time.Now().Add(ti.opts.TokenExpiration).Unix()
+		}
 	}
 
 	// Ensure the "iat" claim is set to the current time
 	if _, exists := claims["iat"]; !exists {
-		claims["iat"] = time.Now().Unix()
+		if slices.Contains(ti.opts.MandatoryClaims, "iat") {
+			claims["iat"] = time.Now().Unix()
+		}
 	}
 
 	// Check for mandatory claims
