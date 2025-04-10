@@ -3,7 +3,6 @@ package tokenbridge
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rsa"
 	"encoding/base64"
 	"fmt"
@@ -190,29 +189,15 @@ func (s *ecSigner) GetJWKS(_ context.Context) (*keyset.JWKS, error) {
 	x := base64.RawURLEncoding.EncodeToString(s.publicKey.X.Bytes())
 	y := base64.RawURLEncoding.EncodeToString(s.publicKey.Y.Bytes())
 
-	// Determine the curve name
-	var crv string
-
-	switch s.publicKey.Curve {
-	case elliptic.P256():
-		crv = "P-256"
-	case elliptic.P384():
-		crv = "P-384"
-	case elliptic.P521():
-		crv = "P-521"
-	default:
-		return nil, fmt.Errorf("unsupported elliptic curve")
-	}
-
 	// Create the JWK for the EC public key
 	jwk := keyset.JWK{
 		Kty: "EC", // Key type
 		Alg: s.signingMethod.Alg(),
 		Use: "sig", // Key usage (signature)
 		Kid: s.keyID,
-		Crv: crv, // Curve name
-		X:   x,   // X coordinate
-		Y:   y,   // Y coordinate
+		Crv: s.publicKey.Curve.Params().Name, // Curve name
+		X:   x,                               // X coordinate
+		Y:   y,                               // Y coordinate
 	}
 
 	return &keyset.JWKS{Keys: []keyset.JWK{jwk}}, nil

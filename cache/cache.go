@@ -1,3 +1,6 @@
+// Package cache provides a thread-safe in-memory cache for storing public keys.
+// It allows adding and retrieving public keys using their key IDs.
+// It also provides a no-operation cache implementation that does not store any keys.
 package cache
 
 import (
