@@ -4,8 +4,7 @@
 [![goreportcard](https://goreportcard.com/badge/github.com/hupe1980/tokenbridge)](https://goreportcard.com/report/github.com/hupe1980/tokenbridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-
-**TokenBridge** is a lightweight Go library that securely bridges identity systems. It allows you to verify ID tokens, exchange them for signed access tokens, and serve public keys via JWKS for token validation.
+**TokenBridge** is a lightweight and flexible Go library designed to bridge identity systems securely. It enables you to verify ID tokens, exchange them for signed access tokens, and serve JSON Web Key Sets (JWKS) for downstream token validation.
 
 > ⚠️ **Experimental**: TokenBridge is under active development. Expect breaking changes — use with care in production environments.
 
@@ -21,6 +20,9 @@
   
 - 🔑 **JWKS Generation**  
   Serve JSON Web Key Sets to allow downstream systems to verify your tokens.
+
+- 🌐 **Flexible Routing**  
+  Route token exchanges based on ID token claims using regex-based matching.
 
 ---
 
@@ -56,6 +58,7 @@ Here's how TokenBridge works in a typical token exchange flow:
 - Verifies ID tokens using an OIDC provider.
 - Issues signed access tokens with support for custom claims.
 - Serves a JWKS endpoint for public key distribution.
+- Routes token exchanges based on ID Token claims.
 
 ### 🪪 OIDC Provider
 - Issues standards-compliant ID tokens.

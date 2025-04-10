@@ -22,5 +22,5 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/kms v1.38.2
 	github.com/coreos/go-oidc/v3 v3.14.1
 	golang.org/x/crypto v0.37.0 // indirect
-	golang.org/x/oauth2 v0.29.0 // indirect
+	golang.org/x/oauth2 v0.29.0
 )

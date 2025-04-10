@@ -10,12 +10,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAuthServer(t *testing.T) {
+func TestTokenIssuerWithJWKS(t *testing.T) {
 	secret := "top-secret"
 	signer := NewHMAC256Signer(secret, "key-id")
-	authServer := NewAuthServer("https://my-auth-server.org", signer)
+	tokenIssuer := NewTokenIssuerWithJWKS("https://my-auth-server.org", signer)
 
-	t.Run("CreateAccessToken_Success", func(t *testing.T) {
+	t.Run("IssueAccessToken_Success", func(t *testing.T) {
 		idToken := &oidc.IDToken{
 			Subject:  "user123",
 			Issuer:   "https://issuer.example.com",
@@ -24,8 +24,8 @@ func TestAuthServer(t *testing.T) {
 			IssuedAt: time.Now(),
 		}
 
-		accessToken, err := authServer.CreateAccessToken(context.Background(), idToken)
-		assert.NoError(t, err, "CreateAccessToken should not return an error")
+		accessToken, err := tokenIssuer.IssueAccessToken(context.Background(), idToken)
+		assert.NoError(t, err, "IssueAccessToken should not return an error")
 		assert.NotEmpty(t, accessToken, "Access token should not be empty")
 
 		// Verify the token
@@ -43,7 +43,7 @@ func TestAuthServer(t *testing.T) {
 	})
 
 	t.Run("GetJWKS_Success", func(t *testing.T) {
-		_, err := authServer.GetJWKS(context.Background())
+		_, err := tokenIssuer.GetJWKS(context.Background())
 		assert.Error(t, err, "GetJWKS should return an error for HMAC")
 	})
 }

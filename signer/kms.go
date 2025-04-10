@@ -2,6 +2,9 @@ package signer
 
 import (
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -13,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/hupe1980/tokenbridge"
+	"github.com/hupe1980/tokenbridge/cache"
 	"github.com/hupe1980/tokenbridge/keyset"
 )
 
@@ -29,6 +33,7 @@ type KMS struct {
 	kmsClient KMSClient                  // AWS KMS client
 	keyID     string                     // The ID of the KMS key used for signing
 	alg       types.SigningAlgorithmSpec // The signing algorithm to use
+	cache     cache.Cache                // Cache for storing and retrieving public keys
 }
 
 // NewKMS creates a new instance of KMS with the given client, key ID, and signing algorithm.
@@ -37,6 +42,7 @@ func NewKMS(kmsClient KMSClient, keyID string, alg types.SigningAlgorithmSpec) t
 		kmsClient: kmsClient,
 		keyID:     keyID,
 		alg:       alg,
+		cache:     cache.NewNoopCache(),
 	}
 }
 
@@ -105,6 +111,17 @@ func (s *KMS) GetJWKS(ctx context.Context) (*keyset.JWKS, error) {
 		return nil, fmt.Errorf("unsupported signing algorithm: %s", s.alg)
 	}
 
+	// Check if the public key is already in the cache
+	if cachedKey, found := s.cache.Get(ctx, s.keyID); found {
+		// Construct the JWKS from the cached key
+		jwk, err := constructJWKFromPublicKey(cachedKey, signingMethod, s.keyID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to construct JWK from cached key: %w", err)
+		}
+
+		return &keyset.JWKS{Keys: []keyset.JWK{jwk}}, nil
+	}
+
 	// Retrieve the public key from AWS KMS
 	getPubKeyInput := &kms.GetPublicKeyInput{
 		KeyId: aws.String(s.keyID),
@@ -115,68 +132,18 @@ func (s *KMS) GetJWKS(ctx context.Context) (*keyset.JWKS, error) {
 		return nil, fmt.Errorf("failed to retrieve public key from KMS: %w", err)
 	}
 
-	// Parse and construct the JWK from the retrieved public key
-	var jwk keyset.JWK
+	// Parse the public key and store it in the cache
+	publicKey, err := parsePublicKey(getPubKeyOutput.PublicKey, signingMethod)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %w", err)
+	}
 
-	switch signingMethod {
-	case jwt.SigningMethodRS256, jwt.SigningMethodRS384, jwt.SigningMethodRS512,
-		jwt.SigningMethodPS256, jwt.SigningMethodPS384, jwt.SigningMethodPS512:
-		// Parse RSA public key
-		block := &pem.Block{
-			Type:  "PUBLIC KEY",
-			Bytes: getPubKeyOutput.PublicKey,
-		}
+	s.cache.Add(ctx, s.keyID, publicKey)
 
-		// Encode the public key to PEM format
-		pemEncodedKey := pem.EncodeToMemory(block)
-
-		pubKey, err := jwt.ParseRSAPublicKeyFromPEM(pemEncodedKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse RSA public key: %w", err)
-		}
-
-		// Construct the RSA JWK
-		jwk = keyset.JWK{
-			Kty: "RSA",                                                  // Key type
-			Alg: signingMethod.Alg(),                                    // Algorithm used for signing
-			Use: "sig",                                                  // Key usage (signature)
-			Kid: s.keyID,                                                // Key ID
-			N:   base64.RawURLEncoding.EncodeToString(pubKey.N.Bytes()), // RSA modulus
-			E:   base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}),  // RSA exponent (default for RSA keys)
-		}
-	case jwt.SigningMethodES256, jwt.SigningMethodES384, jwt.SigningMethodES512:
-		// Parse EC public key
-		pubKey, err := jwt.ParseECPublicKeyFromPEM(getPubKeyOutput.PublicKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse EC public key: %w", err)
-		}
-
-		// Determine the curve name
-		var crv string
-
-		switch pubKey.Curve.Params().Name {
-		case "P-256":
-			crv = "P-256"
-		case "P-384":
-			crv = "P-384"
-		case "P-521":
-			crv = "P-521"
-		default:
-			return nil, fmt.Errorf("unsupported elliptic curve: %s", pubKey.Curve.Params().Name)
-		}
-
-		// Construct the EC JWK
-		jwk = keyset.JWK{
-			Kty: "EC",                                                   // Key type
-			Alg: signingMethod.Alg(),                                    // Algorithm used for signing
-			Use: "sig",                                                  // Key usage (signature)
-			Kid: s.keyID,                                                // Key ID
-			Crv: crv,                                                    // Curve name
-			X:   base64.RawURLEncoding.EncodeToString(pubKey.X.Bytes()), // X coordinate
-			Y:   base64.RawURLEncoding.EncodeToString(pubKey.Y.Bytes()), // Y coordinate
-		}
-	default:
-		return nil, fmt.Errorf("unsupported signing method: %s", signingMethod.Alg())
+	// Construct the JWKS from the retrieved public key
+	jwk, err := constructJWKFromPublicKey(publicKey, signingMethod, s.keyID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct JWK: %w", err)
 	}
 
 	return &keyset.JWKS{Keys: []keyset.JWK{jwk}}, nil
@@ -216,5 +183,53 @@ func getSigningMethod(alg types.SigningAlgorithmSpec) jwt.SigningMethod {
 		return jwt.SigningMethodES512
 	default:
 		return nil // Unsupported algorithm
+	}
+}
+
+// parsePublicKey parses a raw public key into a crypto.PublicKey based on the JWT signing method.
+func parsePublicKey(rawKey []byte, signingMethod jwt.SigningMethod) (crypto.PublicKey, error) {
+	switch signingMethod {
+	case jwt.SigningMethodRS256, jwt.SigningMethodRS384, jwt.SigningMethodRS512,
+		jwt.SigningMethodPS256, jwt.SigningMethodPS384, jwt.SigningMethodPS512:
+		// Parse RSA public key
+		block := &pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: rawKey,
+		}
+		pemEncodedKey := pem.EncodeToMemory(block)
+
+		return jwt.ParseRSAPublicKeyFromPEM(pemEncodedKey)
+	case jwt.SigningMethodES256, jwt.SigningMethodES384, jwt.SigningMethodES512:
+		// Parse EC public key
+		return jwt.ParseECPublicKeyFromPEM(rawKey)
+	default:
+		return nil, fmt.Errorf("unsupported signing method: %s", signingMethod.Alg())
+	}
+}
+
+// constructJWKFromPublicKey constructs a JWK from a given public key, signing method, and key ID.
+func constructJWKFromPublicKey(publicKey crypto.PublicKey, signingMethod jwt.SigningMethod, keyID string) (keyset.JWK, error) {
+	switch pubKey := publicKey.(type) {
+	case *rsa.PublicKey:
+		return keyset.JWK{
+			Kty: "RSA",
+			Alg: signingMethod.Alg(),
+			Use: "sig",
+			Kid: keyID,
+			N:   base64.RawURLEncoding.EncodeToString(pubKey.N.Bytes()),
+			E:   base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}),
+		}, nil
+	case *ecdsa.PublicKey:
+		return keyset.JWK{
+			Kty: "EC",
+			Alg: signingMethod.Alg(),
+			Use: "sig",
+			Kid: keyID,
+			Crv: pubKey.Curve.Params().Name, // Canonical curve name (e.g., P-256)
+			X:   base64.RawURLEncoding.EncodeToString(pubKey.X.Bytes()),
+			Y:   base64.RawURLEncoding.EncodeToString(pubKey.Y.Bytes()),
+		}, nil
+	default:
+		return keyset.JWK{}, fmt.Errorf("unsupported public key type")
 	}
 }

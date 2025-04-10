@@ -29,15 +29,15 @@ func main() {
 		log.Fatalf("Failed to parse issuer URL: %v", err)
 	}
 
-	// Initialize the TokenBridge with mock OIDCVerifier and AuthServer
 	oidcVerifier, err := tokenbridge.NewOIDCVerifier(ctx, issuerURL, []string{"my-local-app"})
 	if err != nil {
 		log.Fatalf("Failed to create OIDC verifier: %v", err)
 	}
 
-	authServer := tokenbridge.NewAuthServer("https://my-auth-server.org", rsaSigner)
+	issuer := tokenbridge.NewTokenIssuerWithJWKS("https://my-auth-server.org", rsaSigner)
 
-	tokenBridge := tokenbridge.New(oidcVerifier, authServer)
+	tokenBridge := tokenbridge.New(oidcVerifier)
+	tokenBridge.SetDefaultIssuer(issuer)
 
 	// Define the /exchange route
 	http.HandleFunc("/exchange", func(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +88,7 @@ func main() {
 		}
 
 		// Get the JWKS
-		jwks, err := tokenBridge.GetJWKS(r.Context())
+		jwks, err := issuer.GetJWKS(r.Context())
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to get JWKS: %v", err), http.StatusInternalServerError)
 			return

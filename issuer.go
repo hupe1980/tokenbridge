@@ -8,11 +8,18 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/hupe1980/tokenbridge/keyset"
+	"golang.org/x/oauth2/clientcredentials"
 )
 
-// AuthServerOptions defines the configuration options for the AuthServer.
-// These options control the behavior of the authentication server, such as token expiration and subject overwriting.
-type AuthServerOptions struct {
+// JWKSProvider defines an additional interface for retrieving the JWKS.
+type JWKSProvider interface {
+	// GetJWKS retrieves the JSON Web Key Set (JWKS) containing the public keys used to verify the signed tokens.
+	GetJWKS(ctx context.Context) (*keyset.JWKS, error)
+}
+
+// TokenIssuerWithJWKSOptions defines the configuration options for the TokenIssuerWithJWKS.
+// These options control the behavior of the token issuer, such as token expiration and subject overwriting.
+type TokenIssuerWithJWKSOptions struct {
 	// MandatoryClaims are the claims that must be present in the access token.
 	MandatoryClaims []string
 
@@ -40,24 +47,24 @@ func DefaultOnTokenCreate(_ context.Context, idToken *oidc.IDToken) (jwt.MapClai
 	}, nil
 }
 
-// AuthServer is responsible for creating and signing access tokens for authenticated users.
-// It uses an underlying signer and the configuration provided in AuthServerOptions.
-type AuthServer struct {
+// TokenIssuerWithJWKS is responsible for creating and signing access tokens for authenticated users.
+// It implements both the TokenIssuer and JWKSProvider interfaces.
+type TokenIssuerWithJWKS struct {
 	iss    string
 	signer Signer
-	opts   AuthServerOptions
+	opts   TokenIssuerWithJWKSOptions
 }
 
-// NewAuthServer creates a new AuthServer instance with the provided signer and optional configuration functions.
+// NewTokenIssuerWithJWKS creates a new TokenIssuerWithJWKS instance with the provided signer and optional configuration functions.
 //
 // Parameters:
 //   - signer: A Signer implementation used to sign the generated access tokens.
-//   - optFns: A variadic list of functions to customize the AuthServerOptions.
+//   - optFns: A variadic list of functions to customize the TokenIssuerWithJWKSOptions.
 //
 // Returns:
-//   - A new AuthServer instance configured with the provided options.
-func NewAuthServer(iss string, signer Signer, optFns ...func(o *AuthServerOptions)) *AuthServer {
-	opts := AuthServerOptions{
+//   - A new TokenIssuerWithJWKS instance configured with the provided options.
+func NewTokenIssuerWithJWKS(iss string, signer Signer, optFns ...func(o *TokenIssuerWithJWKSOptions)) *TokenIssuerWithJWKS {
+	opts := TokenIssuerWithJWKSOptions{
 		MandatoryClaims: []string{"sub", "iss", "aud", "exp", "iat"},
 		TokenExpiration: time.Hour, // Default token expiration is one hour.
 		OnTokenCreate:   DefaultOnTokenCreate,
@@ -68,7 +75,7 @@ func NewAuthServer(iss string, signer Signer, optFns ...func(o *AuthServerOption
 		fn(&opts)
 	}
 
-	return &AuthServer{iss: iss, signer: signer, opts: opts}
+	return &TokenIssuerWithJWKS{iss: iss, signer: signer, opts: opts}
 }
 
 // checkMandatoryClaims ensures that all mandatory claims are present in the provided claims map.
@@ -83,7 +90,7 @@ func checkMandatoryClaims(claims jwt.MapClaims, mandatoryClaims []string) error 
 	return nil
 }
 
-// CreateAccessToken generates an access token based on the provided OIDC ID token and custom claims.
+// IssueAccessToken generates an access token based on the provided OIDC ID token.
 //
 // Parameters:
 //   - ctx: The context used for making requests.
@@ -93,15 +100,15 @@ func checkMandatoryClaims(claims jwt.MapClaims, mandatoryClaims []string) error 
 // Returns:
 //   - The signed JWT access token as a string if successful.
 //   - An error if there is a problem generating or signing the token.
-func (as *AuthServer) CreateAccessToken(ctx context.Context, idToken *oidc.IDToken) (string, error) {
-	claims, err := as.opts.OnTokenCreate(ctx, idToken)
+func (ti *TokenIssuerWithJWKS) IssueAccessToken(ctx context.Context, idToken *oidc.IDToken) (string, error) {
+	claims, err := ti.opts.OnTokenCreate(ctx, idToken)
 	if err != nil {
 		return "", fmt.Errorf("failed to create token claims: %w", err)
 	}
 
 	// Ensure the "exp" claim is set to the token expiration time
 	if _, exists := claims["exp"]; !exists {
-		claims["exp"] = time.Now().Add(as.opts.TokenExpiration).Unix()
+		claims["exp"] = time.Now().Add(ti.opts.TokenExpiration).Unix()
 	}
 
 	// Ensure the "iat" claim is set to the current time
@@ -110,18 +117,18 @@ func (as *AuthServer) CreateAccessToken(ctx context.Context, idToken *oidc.IDTok
 	}
 
 	// Check for mandatory claims
-	if err := checkMandatoryClaims(claims, as.opts.MandatoryClaims); err != nil {
+	if err := checkMandatoryClaims(claims, ti.opts.MandatoryClaims); err != nil {
 		return "", err
 	}
 
 	// Create a new JWT token with the required claims
-	token := jwt.NewWithClaims(as.signer.SigningMethod(), claims)
+	token := jwt.NewWithClaims(ti.signer.SigningMethod(), claims)
 
 	// Add the Key ID (kid) to the token header
-	token.Header["kid"] = as.signer.KeyID()
+	token.Header["kid"] = ti.signer.KeyID()
 
 	// Sign the token using the provided signer
-	tokenString, err := as.signer.SignToken(ctx, token)
+	tokenString, err := ti.signer.SignToken(ctx, token)
 	if err != nil {
 		return "", fmt.Errorf("failed to sign token: %w", err)
 	}
@@ -137,6 +144,40 @@ func (as *AuthServer) CreateAccessToken(ctx context.Context, idToken *oidc.IDTok
 // Returns:
 //   - The JWKS containing the public key(s) used for verifying tokens.
 //   - An error if there is a problem retrieving the JWKS.
-func (as *AuthServer) GetJWKS(ctx context.Context) (*keyset.JWKS, error) {
-	return as.signer.GetJWKS(ctx)
+func (ti *TokenIssuerWithJWKS) GetJWKS(ctx context.Context) (*keyset.JWKS, error) {
+	return ti.signer.GetJWKS(ctx)
+}
+
+// ClientCredentialIssuer is responsible for issuing access tokens using the client credentials flow.
+type ClientCredentialIssuer struct {
+	config *clientcredentials.Config
+}
+
+// NewClientCredentialIssuer creates a new ClientCredentialIssuer instance.
+//
+// Parameters:
+//   - config: A clientcredentials.Config instance containing the OAuth2 client credentials configuration.
+//
+// Returns:
+//   - A new ClientCredentialIssuer instance.
+func NewClientCredentialIssuer(config *clientcredentials.Config) *ClientCredentialIssuer {
+	return &ClientCredentialIssuer{config: config}
+}
+
+// IssueAccessToken generates an access token using the client credentials flow.
+//
+// Parameters:
+//   - ctx: The context used for making requests.
+//
+// Returns:
+//   - The access token as a string if successful.
+//   - An error if there is a problem generating the access token.
+func (cci *ClientCredentialIssuer) IssueAccessToken(ctx context.Context, _ *oidc.IDToken) (string, error) {
+	// Use the client credentials config to retrieve a token
+	token, err := cci.config.Token(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve access token: %w", err)
+	}
+
+	return token.AccessToken, nil
 }
