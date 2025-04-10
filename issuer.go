@@ -29,7 +29,7 @@ type TokenIssuerWithJWKSOptions struct {
 
 	// OnTokenCreate is a callback function that allows customization of claims during token creation.
 	// If not set, a default implementation will be used.
-	OnTokenCreate func(ctx context.Context, idToken *oidc.IDToken) (jwt.MapClaims, error)
+	OnTokenCreate func(ctx context.Context, issuer string, idToken *oidc.IDToken) (jwt.MapClaims, error)
 }
 
 // DefaultOnTokenCreate is the default implementation of the OnTokenCreate callback.
@@ -39,9 +39,9 @@ type TokenIssuerWithJWKSOptions struct {
 // It returns a map of claims that will be included in the generated access token.
 // The "sub" claim is set to the subject of the ID token, and the "iss" claim is set to the issuer of the ID token.
 // The "aud" claim is set to the audience of the ID token.
-func DefaultOnTokenCreate(_ context.Context, idToken *oidc.IDToken) (jwt.MapClaims, error) {
+func DefaultOnTokenCreate(_ context.Context, issuer string, idToken *oidc.IDToken) (jwt.MapClaims, error) {
 	return jwt.MapClaims{
-		"iss": idToken.Issuer,
+		"iss": issuer,
 		"sub": idToken.Subject,
 		"aud": idToken.Audience,
 	}, nil
@@ -101,7 +101,7 @@ func checkMandatoryClaims(claims jwt.MapClaims, mandatoryClaims []string) error 
 //   - The signed JWT access token as a string if successful.
 //   - An error if there is a problem generating or signing the token.
 func (ti *TokenIssuerWithJWKS) IssueAccessToken(ctx context.Context, idToken *oidc.IDToken) (string, error) {
-	claims, err := ti.opts.OnTokenCreate(ctx, idToken)
+	claims, err := ti.opts.OnTokenCreate(ctx, ti.iss, idToken)
 	if err != nil {
 		return "", fmt.Errorf("failed to create token claims: %w", err)
 	}
