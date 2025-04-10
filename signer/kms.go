@@ -24,8 +24,17 @@ import (
 type KMSClient interface {
 	// Sign signs a digest with the given key using KMS.
 	Sign(ctx context.Context, input *kms.SignInput, optFns ...func(*kms.Options)) (*kms.SignOutput, error)
+
 	// GetPublicKey retrieves the public key associated with the given key ID.
 	GetPublicKey(ctx context.Context, input *kms.GetPublicKeyInput, optFns ...func(*kms.Options)) (*kms.GetPublicKeyOutput, error)
+}
+
+// KMSOptions defines the configuration options for the KMS signer.
+// It allows customization of the cache used for storing and retrieving public keys.
+// The default cache is a no-op cache, which means it does not store any keys.
+// You can provide a custom cache implementation that implements the cache.Cache interface.
+type KMSOptions struct {
+	Cache cache.Cache // Cache for storing and retrieving public keys
 }
 
 // KMS represents a signer that uses AWS Key Management Service (KMS) to sign JWT tokens.
@@ -37,12 +46,22 @@ type KMS struct {
 }
 
 // NewKMS creates a new instance of KMS with the given client, key ID, and signing algorithm.
-func NewKMS(kmsClient KMSClient, keyID string, alg types.SigningAlgorithmSpec) tokenbridge.Signer {
+// It also accepts optional configuration functions to customize the KMSOptions.
+func NewKMS(kmsClient KMSClient, keyID string, alg types.SigningAlgorithmSpec, optFns ...func(o *KMSOptions)) tokenbridge.Signer {
+	opts := KMSOptions{
+		Cache: cache.NewNoopCache(), // Default to a no-op cache
+	}
+
+	// Apply custom options provided through optFns
+	for _, fn := range optFns {
+		fn(&opts)
+	}
+
 	return &KMS{
 		kmsClient: kmsClient,
 		keyID:     keyID,
 		alg:       alg,
-		cache:     cache.NewNoopCache(),
+		cache:     opts.Cache,
 	}
 }
 
