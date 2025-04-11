@@ -30,13 +30,13 @@ type KMSClient interface {
 // It allows customization of the cache used for storing and retrieving public keys.
 // The default cache is a no-op cache, which means it does not store any keys.
 // You can provide a custom cache implementation that implements the Cache interface.
-type KMSOptions struct {
+type KMSSignerOptions struct {
 	Cache         Cache    // Cache for storing and retrieving public keys
 	RotatedKeyIDs []string // A list of key IDs that have been rotated out of active use but are still included in the JWKS
 }
 
-// KMS represents a signer that uses AWS Key Management Service (KMS) to sign JWT tokens.
-type KMS struct {
+// KMSSigner represents a signer that uses AWS Key Management Service (KMS) to sign JWT tokens.
+type KMSSigner struct {
 	kmsClient     KMSClient                  // AWS KMS client
 	keyID         string                     // The ID of the KMS key used for signing
 	alg           types.SigningAlgorithmSpec // The signing algorithm to use
@@ -44,10 +44,10 @@ type KMS struct {
 	rotatedKeyIDs []string                   // A list of key IDs that have been rotated out of active use but are still included in the JWKS
 }
 
-// NewKMS creates a new instance of KMS with the given client, key ID, and signing algorithm.
+// NewKMSSigner creates a new instance of KMSSigner with the given client, key ID, and signing algorithm.
 // It also accepts optional configuration functions to customize the KMSOptions.
-func NewKMS(kmsClient KMSClient, keyID string, alg types.SigningAlgorithmSpec, optFns ...func(o *KMSOptions)) Signer {
-	opts := KMSOptions{
+func NewKMSSigner(kmsClient KMSClient, keyID string, alg types.SigningAlgorithmSpec, optFns ...func(o *KMSSignerOptions)) Signer {
+	opts := KMSSignerOptions{
 		Cache:         NewNoopCache(), // Default to a no-op cache
 		RotatedKeyIDs: make([]string, 0),
 	}
@@ -57,7 +57,7 @@ func NewKMS(kmsClient KMSClient, keyID string, alg types.SigningAlgorithmSpec, o
 		fn(&opts)
 	}
 
-	return &KMS{
+	return &KMSSigner{
 		kmsClient:     kmsClient,
 		keyID:         keyID,
 		alg:           alg,
@@ -75,7 +75,7 @@ func NewKMS(kmsClient KMSClient, keyID string, alg types.SigningAlgorithmSpec, o
 // Returns:
 //   - The signed JWT token as a string.
 //   - An error if the signing process fails.
-func (s *KMS) SignToken(ctx context.Context, token *jwt.Token) (string, error) {
+func (s *KMSSigner) SignToken(ctx context.Context, token *jwt.Token) (string, error) {
 	// Serialize the token into a string for signing
 	tokenString, err := token.SigningString()
 	if err != nil {
@@ -124,7 +124,7 @@ func (s *KMS) SignToken(ctx context.Context, token *jwt.Token) (string, error) {
 // Returns:
 //   - A JWKS containing the public key(s) for verifying the token signature.
 //   - An error if retrieving the public key or constructing the JWKS fails.
-func (s *KMS) GetJWKS(ctx context.Context) (*JWKS, error) {
+func (s *KMSSigner) GetJWKS(ctx context.Context) (*JWKS, error) {
 	// Map the KMS signing algorithm to the corresponding JWT signing method.
 	signingMethod := getSigningMethod(s.alg)
 	if signingMethod == nil {
@@ -157,7 +157,7 @@ func (s *KMS) GetJWKS(ctx context.Context) (*JWKS, error) {
 }
 
 // getPublicKeyJWK retrieves the public key for a given key ID and constructs a JWK.
-func (s *KMS) getPublicKeyJWK(ctx context.Context, keyID string, signingMethod jwt.SigningMethod) (JWK, error) {
+func (s *KMSSigner) getPublicKeyJWK(ctx context.Context, keyID string, signingMethod jwt.SigningMethod) (JWK, error) {
 	// Check if the public key is already in the cache
 	if cachedKey, found := s.cache.Get(ctx, keyID); found {
 		// Construct the JWK from the cached key
@@ -187,12 +187,12 @@ func (s *KMS) getPublicKeyJWK(ctx context.Context, keyID string, signingMethod j
 }
 
 // SigningMethod returns the JWT signing method corresponding to the KMS signing algorithm.
-func (s *KMS) SigningMethod() jwt.SigningMethod {
+func (s *KMSSigner) SigningMethod() jwt.SigningMethod {
 	return getSigningMethod(s.alg)
 }
 
 // KeyID returns the ID of the KMS key used for signing.
-func (s *KMS) KeyID() string {
+func (s *KMSSigner) KeyID() string {
 	return s.keyID
 }
 

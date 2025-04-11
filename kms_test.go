@@ -50,7 +50,7 @@ func TestKMSSigner(t *testing.T) {
 	mockClient := &mockKMSClient{}
 	keyID := "kms-key-id"
 	alg := types.SigningAlgorithmSpecRsassaPkcs1V15Sha256
-	kmsSigner := NewKMS(mockClient, keyID, alg)
+	kmsSigner := NewKMSSigner(mockClient, keyID, alg)
 
 	t.Run("SignToken", func(t *testing.T) {
 		// Create a JWT token
