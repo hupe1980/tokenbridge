@@ -8,14 +8,14 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/hupe1980/tokenbridge/keyset"
+
 	"golang.org/x/oauth2/clientcredentials"
 )
 
 // JWKSProvider defines an additional interface for retrieving the JWKS.
 type JWKSProvider interface {
 	// GetJWKS retrieves the JSON Web Key Set (JWKS) containing the public keys used to verify the signed tokens.
-	GetJWKS(ctx context.Context) (*keyset.JWKS, error)
+	GetJWKS(ctx context.Context) (*JWKS, error)
 }
 
 // TokenIssuerWithJWKSOptions defines the configuration options for the TokenIssuerWithJWKS.
@@ -149,7 +149,7 @@ func (ti *TokenIssuerWithJWKS) IssueAccessToken(ctx context.Context, idToken *oi
 // Returns:
 //   - The JWKS containing the public key(s) used for verifying tokens.
 //   - An error if there is a problem retrieving the JWKS.
-func (ti *TokenIssuerWithJWKS) GetJWKS(ctx context.Context) (*keyset.JWKS, error) {
+func (ti *TokenIssuerWithJWKS) GetJWKS(ctx context.Context) (*JWKS, error) {
 	return ti.signer.GetJWKS(ctx)
 }
 

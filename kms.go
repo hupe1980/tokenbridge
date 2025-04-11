@@ -1,4 +1,4 @@
-package signer
+package tokenbridge
 
 import (
 	"context"
@@ -15,9 +15,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/hupe1980/tokenbridge"
-	"github.com/hupe1980/tokenbridge/cache"
-	"github.com/hupe1980/tokenbridge/keyset"
 )
 
 // KMSClient defines the methods that are needed from AWS KMS client for signing tokens and fetching public keys.
@@ -32,24 +29,27 @@ type KMSClient interface {
 // KMSOptions defines the configuration options for the KMS signer.
 // It allows customization of the cache used for storing and retrieving public keys.
 // The default cache is a no-op cache, which means it does not store any keys.
-// You can provide a custom cache implementation that implements the cache.Cache interface.
+// You can provide a custom cache implementation that implements the Cache interface.
 type KMSOptions struct {
-	Cache cache.Cache // Cache for storing and retrieving public keys
+	Cache         Cache    // Cache for storing and retrieving public keys
+	RotatedKeyIDs []string // A list of key IDs that have been rotated out of active use but are still included in the JWKS
 }
 
 // KMS represents a signer that uses AWS Key Management Service (KMS) to sign JWT tokens.
 type KMS struct {
-	kmsClient KMSClient                  // AWS KMS client
-	keyID     string                     // The ID of the KMS key used for signing
-	alg       types.SigningAlgorithmSpec // The signing algorithm to use
-	cache     cache.Cache                // Cache for storing and retrieving public keys
+	kmsClient     KMSClient                  // AWS KMS client
+	keyID         string                     // The ID of the KMS key used for signing
+	alg           types.SigningAlgorithmSpec // The signing algorithm to use
+	cache         Cache                      // Cache for storing and retrieving public keys
+	rotatedKeyIDs []string                   // A list of key IDs that have been rotated out of active use but are still included in the JWKS
 }
 
 // NewKMS creates a new instance of KMS with the given client, key ID, and signing algorithm.
 // It also accepts optional configuration functions to customize the KMSOptions.
-func NewKMS(kmsClient KMSClient, keyID string, alg types.SigningAlgorithmSpec, optFns ...func(o *KMSOptions)) tokenbridge.Signer {
+func NewKMS(kmsClient KMSClient, keyID string, alg types.SigningAlgorithmSpec, optFns ...func(o *KMSOptions)) Signer {
 	opts := KMSOptions{
-		Cache: cache.NewNoopCache(), // Default to a no-op cache
+		Cache:         NewNoopCache(), // Default to a no-op cache
+		RotatedKeyIDs: make([]string, 0),
 	}
 
 	// Apply custom options provided through optFns
@@ -58,10 +58,11 @@ func NewKMS(kmsClient KMSClient, keyID string, alg types.SigningAlgorithmSpec, o
 	}
 
 	return &KMS{
-		kmsClient: kmsClient,
-		keyID:     keyID,
-		alg:       alg,
-		cache:     opts.Cache,
+		kmsClient:     kmsClient,
+		keyID:         keyID,
+		alg:           alg,
+		cache:         opts.Cache,
+		rotatedKeyIDs: opts.RotatedKeyIDs,
 	}
 }
 
@@ -115,7 +116,7 @@ func (s *KMS) SignToken(ctx context.Context, token *jwt.Token) (string, error) {
 	return fmt.Sprintf("%s.%s", tokenString, base64.RawURLEncoding.EncodeToString(signOutput.Signature)), nil
 }
 
-// GetJWKS retrieves the JSON Web Key Set (JWKS) containing the public key used for verifying the signed tokens.
+// GetJWKS retrieves the JSON Web Key Set (JWKS) containing the public keys used for verifying signed tokens.
 //
 // Parameters:
 //   - ctx: The context to use for the public key retrieval request.
@@ -123,49 +124,66 @@ func (s *KMS) SignToken(ctx context.Context, token *jwt.Token) (string, error) {
 // Returns:
 //   - A JWKS containing the public key(s) for verifying the token signature.
 //   - An error if retrieving the public key or constructing the JWKS fails.
-func (s *KMS) GetJWKS(ctx context.Context) (*keyset.JWKS, error) {
+func (s *KMS) GetJWKS(ctx context.Context) (*JWKS, error) {
 	// Map the KMS signing algorithm to the corresponding JWT signing method.
 	signingMethod := getSigningMethod(s.alg)
 	if signingMethod == nil {
 		return nil, fmt.Errorf("unsupported signing algorithm: %s", s.alg)
 	}
 
-	// Check if the public key is already in the cache
-	if cachedKey, found := s.cache.Get(ctx, s.keyID); found {
-		// Construct the JWKS from the cached key
-		jwk, err := constructJWKFromPublicKey(cachedKey, signingMethod, s.keyID)
+	// Initialize the JWKS
+	jwks := &JWKS{Keys: []JWK{}}
+
+	// Add the active key to the JWKS
+	activeKey, err := s.getPublicKeyJWK(ctx, s.keyID, signingMethod)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve active key: %w", err)
+	}
+
+	jwks.Keys = append(jwks.Keys, activeKey)
+
+	// Add rotated keys to the JWKS
+	for _, rotatedKeyID := range s.rotatedKeyIDs {
+		rotatedKey, err := s.getPublicKeyJWK(ctx, rotatedKeyID, signingMethod)
 		if err != nil {
-			return nil, fmt.Errorf("failed to construct JWK from cached key: %w", err)
+			return nil, fmt.Errorf("failed to retrieve rotated key %s: %w", rotatedKeyID, err)
 		}
 
-		return &keyset.JWKS{Keys: []keyset.JWK{jwk}}, nil
+		jwks.Keys = append(jwks.Keys, rotatedKey)
+	}
+
+	// Return the constructed JWKS
+	return jwks, nil
+}
+
+// getPublicKeyJWK retrieves the public key for a given key ID and constructs a JWK.
+func (s *KMS) getPublicKeyJWK(ctx context.Context, keyID string, signingMethod jwt.SigningMethod) (JWK, error) {
+	// Check if the public key is already in the cache
+	if cachedKey, found := s.cache.Get(ctx, keyID); found {
+		// Construct the JWK from the cached key
+		return constructJWKFromPublicKey(cachedKey, signingMethod, keyID)
 	}
 
 	// Retrieve the public key from AWS KMS
 	getPubKeyInput := &kms.GetPublicKeyInput{
-		KeyId: aws.String(s.keyID),
+		KeyId: aws.String(keyID),
 	}
 
 	getPubKeyOutput, err := s.kmsClient.GetPublicKey(ctx, getPubKeyInput)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve public key from KMS: %w", err)
+		return JWK{}, fmt.Errorf("failed to retrieve public key from KMS: %w", err)
 	}
 
 	// Parse the public key and store it in the cache
 	publicKey, err := parsePublicKey(getPubKeyOutput.PublicKey, signingMethod)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse public key: %w", err)
+		return JWK{}, fmt.Errorf("failed to parse public key: %w", err)
 	}
 
-	s.cache.Add(ctx, s.keyID, publicKey)
+	s.cache.Add(ctx, keyID, publicKey)
 
-	// Construct the JWKS from the retrieved public key
-	jwk, err := constructJWKFromPublicKey(publicKey, signingMethod, s.keyID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to construct JWK: %w", err)
-	}
-
-	return &keyset.JWKS{Keys: []keyset.JWK{jwk}}, nil
+	// Construct the JWK from the retrieved public key
+	return constructJWKFromPublicKey(publicKey, signingMethod, keyID)
 }
 
 // SigningMethod returns the JWT signing method corresponding to the KMS signing algorithm.
@@ -227,10 +245,10 @@ func parsePublicKey(rawKey []byte, signingMethod jwt.SigningMethod) (crypto.Publ
 }
 
 // constructJWKFromPublicKey constructs a JWK from a given public key, signing method, and key ID.
-func constructJWKFromPublicKey(publicKey crypto.PublicKey, signingMethod jwt.SigningMethod, keyID string) (keyset.JWK, error) {
+func constructJWKFromPublicKey(publicKey crypto.PublicKey, signingMethod jwt.SigningMethod, keyID string) (JWK, error) {
 	switch pubKey := publicKey.(type) {
 	case *rsa.PublicKey:
-		return keyset.JWK{
+		return JWK{
 			Kty: "RSA",
 			Alg: signingMethod.Alg(),
 			Use: "sig",
@@ -239,7 +257,7 @@ func constructJWKFromPublicKey(publicKey crypto.PublicKey, signingMethod jwt.Sig
 			E:   base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}),
 		}, nil
 	case *ecdsa.PublicKey:
-		return keyset.JWK{
+		return JWK{
 			Kty: "EC",
 			Alg: signingMethod.Alg(),
 			Use: "sig",
@@ -249,6 +267,6 @@ func constructJWKFromPublicKey(publicKey crypto.PublicKey, signingMethod jwt.Sig
 			Y:   base64.RawURLEncoding.EncodeToString(pubKey.Y.Bytes()),
 		}, nil
 	default:
-		return keyset.JWK{}, fmt.Errorf("unsupported public key type")
+		return JWK{}, fmt.Errorf("unsupported public key type")
 	}
 }

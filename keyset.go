@@ -1,8 +1,4 @@
-// Package keyset provides functionality to parse and handle JSON Web Key Sets (JWKS).
-// A JWKS is a JSON data structure that represents a set of keys that can be used to
-// verify JSON Web Tokens (JWTs). The package defines types for parsing and handling
-// both JWKS and individual keys (JWK) according to the RFC 7517 specification.
-package keyset
+package tokenbridge
 
 import (
 	"encoding/json"
