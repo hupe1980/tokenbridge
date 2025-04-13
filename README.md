@@ -6,8 +6,6 @@
 
 **TokenBridge** is a lightweight and flexible Go library designed to bridge identity systems securely. It enables you to verify ID tokens, exchange them for signed access tokens, and serve JSON Web Key Sets (JWKS) for downstream token validation.
 
-> ⚠️ **Experimental**: TokenBridge is under active development. Expect breaking changes — use with care in production environments.
-
 ---
 
 ## ✨ Features
