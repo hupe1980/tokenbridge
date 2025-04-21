@@ -71,6 +71,7 @@ func main() {
 
 		// Return the access token
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
 
 		if err := json.NewEncoder(w).Encode(map[string]string{
 			"access_token": accessToken,
