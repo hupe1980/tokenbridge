@@ -19,9 +19,6 @@
 - 🔑 **JWKS Generation**  
   Serve JSON Web Key Sets to allow downstream systems to verify your tokens.
 
-- 🌐 **Flexible Routing**  
-  Route token exchanges based on ID token claims using regex-based matching.
-
 ---
 
 ## 🧭 Architecture
@@ -44,8 +41,8 @@ Here's how TokenBridge works in a typical token exchange flow:
           |   3. Returns Access Token |                           |
           +<--------------------------+                           |
           |                           |                           |
-
 ```    
+
 ## 🧩 Components
 
 ### 👤 Client

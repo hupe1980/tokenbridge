@@ -14,85 +14,16 @@ type MockTokenIssuer struct {
 	accessToken string
 }
 
-func (m *MockTokenIssuer) IssueAccessToken(_ context.Context, _ *oidc.IDToken) (string, error) {
-	return m.accessToken, nil
+func (m *MockTokenIssuer) IssueAccessToken(_ context.Context, _ *oidc.IDToken) (string, int64, error) {
+	return m.accessToken, 300, nil
 }
 
 func TestTokenBridge(t *testing.T) {
-	t.Run("AddRoute_Success", func(t *testing.T) {
-		oidcVerifier := &OIDCVerifier{} // Mock or stub implementation
-		tokenBridge := New(oidcVerifier)
-
-		mockIssuer1 := &MockTokenIssuer{accessToken: "mock-access-token-1"}
-
-		err := tokenBridge.AddRoute(map[string]string{
-			"role": "admin",
-			"org":  "example-org",
-		}, mockIssuer1)
-		assert.NoError(t, err, "AddRoute should not return an error")
-	})
-
-	t.Run("AddRoute_InvalidRegex", func(t *testing.T) {
-		oidcVerifier := &OIDCVerifier{} // Mock or stub implementation
-		tokenBridge := New(oidcVerifier)
-
-		mockIssuer1 := &MockTokenIssuer{accessToken: "mock-access-token-1"}
-
-		err := tokenBridge.AddRoute(map[string]string{
-			"role": "[invalid-regex",
-		}, mockIssuer1)
-		assert.Error(t, err, "AddRoute should return an error for invalid regex")
-	})
-
-	t.Run("MatchRoute_Success", func(t *testing.T) {
-		oidcVerifier := &OIDCVerifier{} // Mock or stub implementation
-		tokenBridge := New(oidcVerifier)
-
-		mockIssuer1 := &MockTokenIssuer{accessToken: "mock-access-token-1"}
-		mockIssuer2 := &MockTokenIssuer{accessToken: "mock-access-token-2"}
-
-		// Add routes
-		_ = tokenBridge.AddRoute(map[string]string{
-			"role": "admin",
-			"org":  "example-org",
-		}, mockIssuer1)
-
-		_ = tokenBridge.AddRoute(map[string]string{
-			"role": "user",
-			"org":  ".*",
-		}, mockIssuer2)
-
-		// Test matching claims
-		claims := map[string]any{
-			"role": "admin",
-			"org":  "example-org",
-		}
-
-		issuer, err := tokenBridge.matchRoute(claims)
-		assert.NoError(t, err, "matchRoute should not return an error")
-		assert.Equal(t, mockIssuer1, issuer, "Expected mockIssuer1 to be returned")
-	})
-
-	t.Run("MatchRoute_NoMatch", func(t *testing.T) {
-		oidcVerifier := &OIDCVerifier{} // Mock or stub implementation
-		tokenBridge := New(oidcVerifier)
-
-		claims := map[string]any{
-			"role": "guest",
-			"org":  "unknown-org",
-		}
-
-		issuer, err := tokenBridge.matchRoute(claims)
-		assert.Error(t, err, "matchRoute should return an error for no matching route")
-		assert.Nil(t, issuer, "Issuer should be nil when no route matches")
-	})
-
 	t.Run("ExchangeToken_Success", func(t *testing.T) {
 		oidcVerifier := &OIDCVerifier{} // Mock or stub implementation
-		tokenBridge := New(oidcVerifier)
+		mockIssuer := &MockTokenIssuer{accessToken: "mock-access-token"}
 
-		mockIssuer1 := &MockTokenIssuer{accessToken: "mock-access-token-1"}
-		mockIssuer2 := &MockTokenIssuer{accessToken: "mock-access-token-2"}
+		tokenBridge := New(oidcVerifier, mockIssuer)
 
 		// Mock OIDCVerifier
 		tokenBridge.oidcVerifier = &MockOIDCVerifier{
@@ -101,53 +32,80 @@ func TestTokenBridge(t *testing.T) {
 					Subject: "user123",
 					Issuer:  "https://issuer.example.com",
 				}
-
 				setIDTokenClaims(idToken, []byte(`{"role":"admin","org":"example-org"}`))
-
 				return idToken, nil
 			},
 		}
 
-		// Add a route
-		_ = tokenBridge.AddRoute(map[string]string{
-			"role": "guest",
-			"org":  "example-org",
-		}, mockIssuer1)
-
-		_ = tokenBridge.AddRoute(map[string]string{
-			"role": "admin",
-			"org":  "example-org",
-		}, mockIssuer2)
-
-		// Exchange token
-		accessToken, err := tokenBridge.ExchangeToken(context.Background(), "raw-id-token")
+		result, err := tokenBridge.ExchangeToken(context.Background(), "raw-id-token")
 		assert.NoError(t, err, "ExchangeToken should not return an error")
-		assert.Equal(t, "mock-access-token-2", accessToken, "Expected mock-access-token to be returned")
+		assert.NotNil(t, result, "Result should not be nil")
+		assert.Equal(t, "mock-access-token", result.AccessToken, "Expected mock-access-token to be returned")
+		assert.Equal(t, int64(300), result.ExpiresIn)
+		assert.Equal(t, "urn:ietf:params:oauth:token-type:access_token", result.IssuedTokenType)
+		assert.Equal(t, "Bearer", result.TokenType)
 	})
 
-	t.Run("ExchangeToken_NoMatchingRoute", func(t *testing.T) {
+	t.Run("ExchangeToken_NoIssuer", func(t *testing.T) {
 		oidcVerifier := &OIDCVerifier{} // Mock or stub implementation
-		tokenBridge := New(oidcVerifier)
+		tokenBridge := New(oidcVerifier, nil)
 
-		// Mock OIDCVerifier
+		result, err := tokenBridge.ExchangeToken(context.Background(), "raw-id-token")
+		assert.Error(t, err, "ExchangeToken should return an error if no issuer is configured")
+		assert.Nil(t, result, "Result should be nil when no issuer is configured")
+	})
+
+	t.Run("ExchangeToken_VerifyFail", func(t *testing.T) {
+		oidcVerifier := &OIDCVerifier{} // Mock or stub implementation
+		mockIssuer := &MockTokenIssuer{accessToken: "mock-access-token"}
+
+		tokenBridge := New(oidcVerifier, mockIssuer)
+
+		tokenBridge.oidcVerifier = &MockOIDCVerifier{
+			VerifyFunc: func(_ context.Context, _ string) (*oidc.IDToken, error) {
+				return nil, assert.AnError
+			},
+		}
+
+		result, err := tokenBridge.ExchangeToken(context.Background(), "raw-id-token")
+		assert.Error(t, err, "ExchangeToken should return an error if verification fails")
+		assert.Nil(t, result, "Result should be nil when verification fails")
+	})
+
+	t.Run("ExchangeToken_IssueFail", func(t *testing.T) {
+		oidcVerifier := &OIDCVerifier{} // Mock or stub implementation
+
+		mockIssuer := &MockTokenIssuer{accessToken: "mock-access-token"}
+		tokenBridge := New(oidcVerifier, mockIssuer)
+
 		tokenBridge.oidcVerifier = &MockOIDCVerifier{
 			VerifyFunc: func(_ context.Context, _ string) (*oidc.IDToken, error) {
 				idToken := &oidc.IDToken{
 					Subject: "user123",
 					Issuer:  "https://issuer.example.com",
 				}
-
-				setIDTokenClaims(idToken, []byte(`{"role":"guest","org":"unknown-org"}`))
-
+				setIDTokenClaims(idToken, []byte(`{"role":"admin","org":"example-org"}`))
 				return idToken, nil
 			},
 		}
 
-		// Exchange token
-		accessToken, err := tokenBridge.ExchangeToken(context.Background(), "raw-id-token")
-		assert.Error(t, err, "ExchangeToken should return an error for no matching route")
-		assert.Empty(t, accessToken, "Access token should be empty when no route matches")
+		// Override IssueAccessToken to return an error
+		tokenBridge.issuer = &struct{ MockTokenIssuer }{
+			MockTokenIssuer{accessToken: "mock-access-token"},
+		}
+		tokenBridge.issuer = &errorIssuer{}
+
+		result, err := tokenBridge.ExchangeToken(context.Background(), "raw-id-token")
+		assert.Error(t, err, "ExchangeToken should return an error if issuing fails")
+		assert.Nil(t, result, "Result should be nil when issuing fails")
 	})
+}
+
+// errorIssuer always returns an error for IssueAccessToken
+type errorIssuer struct{}
+
+func (e *errorIssuer) IssueAccessToken(_ context.Context, _ *oidc.IDToken) (string, int64, error) {
+	return "", 0, assert.AnError
 }
 
 // MockOIDCVerifier is a mock implementation of the OIDCVerifier.

@@ -24,9 +24,10 @@ func TestTokenIssuerWithJWKS(t *testing.T) {
 			IssuedAt: time.Now(),
 		}
 
-		accessToken, err := tokenIssuer.IssueAccessToken(context.Background(), idToken)
+		accessToken, expiresIn, err := tokenIssuer.IssueAccessToken(context.Background(), idToken)
 		assert.NoError(t, err, "IssueAccessToken should not return an error")
 		assert.NotEmpty(t, accessToken, "Access token should not be empty")
+		assert.NotEqual(t, 0, expiresIn, "ExpiresIn should not be zero")
 
 		// Verify the token
 		parsedToken, err := jwt.Parse(accessToken, func(token *jwt.Token) (any, error) {

@@ -3,7 +3,6 @@ package tokenbridge
 import (
 	"context"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -101,29 +100,25 @@ func checkMandatoryClaims(claims jwt.MapClaims, mandatoryClaims []string) error 
 // Returns:
 //   - The signed JWT access token as a string if successful.
 //   - An error if there is a problem generating or signing the token.
-func (ti *TokenIssuerWithJWKS) IssueAccessToken(ctx context.Context, idToken *oidc.IDToken) (string, error) {
+func (ti *TokenIssuerWithJWKS) IssueAccessToken(ctx context.Context, idToken *oidc.IDToken) (string, int64, error) {
 	claims, err := ti.opts.OnTokenCreate(ctx, ti.iss, idToken)
 	if err != nil {
-		return "", fmt.Errorf("failed to create token claims: %w", err)
+		return "", 0, fmt.Errorf("failed to create token claims: %w", err)
 	}
 
 	// Ensure the "exp" claim is set to the token expiration time
 	if _, exists := claims["exp"]; !exists {
-		if slices.Contains(ti.opts.MandatoryClaims, "exp") {
-			claims["exp"] = time.Now().Add(ti.opts.TokenExpiration).Unix()
-		}
+		claims["exp"] = time.Now().Add(ti.opts.TokenExpiration).Unix()
 	}
 
 	// Ensure the "iat" claim is set to the current time
 	if _, exists := claims["iat"]; !exists {
-		if slices.Contains(ti.opts.MandatoryClaims, "iat") {
-			claims["iat"] = time.Now().Unix()
-		}
+		claims["iat"] = time.Now().Unix()
 	}
 
 	// Check for mandatory claims
 	if err := checkMandatoryClaims(claims, ti.opts.MandatoryClaims); err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	// Create a new JWT token with the required claims
@@ -135,10 +130,22 @@ func (ti *TokenIssuerWithJWKS) IssueAccessToken(ctx context.Context, idToken *oi
 	// Sign the token using the provided signer
 	tokenString, err := ti.signer.SignToken(ctx, token)
 	if err != nil {
-		return "", fmt.Errorf("failed to sign token: %w", err)
+		return "", 0, fmt.Errorf("failed to sign token: %w", err)
 	}
 
-	return tokenString, nil
+	expiresVal, ok := claims["exp"]
+	if !ok {
+		return "", 0, fmt.Errorf("missing 'exp' claim after setting mandatory claims")
+	}
+
+	expInt, ok := expiresVal.(int64)
+	if !ok {
+		return "", 0, fmt.Errorf("'exp' claim is not an int64 or float64")
+	}
+
+	expiresIn := expInt - time.Now().Unix()
+
+	return tokenString, expiresIn, nil
 }
 
 // GetJWKS retrieves the JSON Web Key Set (JWKS) containing the public keys used to verify the signed tokens.
@@ -177,12 +184,12 @@ func NewClientCredentialIssuer(config *clientcredentials.Config) *ClientCredenti
 // Returns:
 //   - The access token as a string if successful.
 //   - An error if there is a problem generating the access token.
-func (cci *ClientCredentialIssuer) IssueAccessToken(ctx context.Context, _ *oidc.IDToken) (string, error) {
+func (cci *ClientCredentialIssuer) IssueAccessToken(ctx context.Context, _ *oidc.IDToken) (string, int64, error) {
 	// Use the client credentials config to retrieve a token
 	token, err := cci.config.Token(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to retrieve access token: %w", err)
+		return "", 0, fmt.Errorf("failed to retrieve access token: %w", err)
 	}
 
-	return token.AccessToken, nil
+	return token.AccessToken, token.ExpiresIn, nil
 }
