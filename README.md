@@ -53,7 +53,6 @@ Here's how TokenBridge works in a typical token exchange flow:
 - Verifies ID tokens using an OIDC provider.
 - Issues signed access tokens with support for custom claims.
 - Serves a JWKS endpoint for public key distribution.
-- Routes token exchanges based on ID Token claims.
 
 ### 🪪 OIDC Provider
 - Issues standards-compliant ID tokens.
@@ -64,6 +63,7 @@ Here's how TokenBridge works in a typical token exchange flow:
 Looking to integrate or extend TokenBridge? Check out these related projects:
 
 - [**TokenBridge GitHub Action**](https://github.com/hupe1980/tokenbridge-action): Automate your workflows with TokenBridge using GitHub Actions.
+- [**TokenBridge K8s Sidecar**](https://github.com/hupe1980/tokenbridge-k8s-sidecar): Kubernetes sidecar for automatic token exchange and injection.
 - [**TokenBridge Backend Example**](https://github.com/hupe1980/tokenbridge-backend-example): A practical example of how to create a TokenBridge backend application.
 
 ## 🤝 Contributing
